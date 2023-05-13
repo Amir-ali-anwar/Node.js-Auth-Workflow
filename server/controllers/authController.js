@@ -23,7 +23,8 @@ const register = async (req, res) => {
 
   const verificationToken= crypto.randomBytes(40).toString('hex')
   const user = await User.create({ name, email, password, role,verificationToken });
-  res.status(StatusCodes.CREATED).json({ user: user });
+  res.status(StatusCodes.CREATED).json({  msg: 'Success! Please check your email to verify account',
+  user:user.verificationToken });
 };
 const verifyEmail= async (req,res)=>{
   const {verificationToken,email}= req.body;
