@@ -8,9 +8,14 @@ const register = async (req, res) => {
   const { email, name, password } = req.body;
 
   const emailAlreadyExists = await User.findOne({ email });
+  
+  if (emailAlreadyExists && !emailAlreadyExists.isVerified ) {
+    throw new CustomError.BadRequestError('Email already exists, please verify your email');
+  }  
   if (emailAlreadyExists) {
     throw new CustomError.BadRequestError('Email already exists');
   }
+
 
   // first registered user is an admin
   const isFirstAccount = (await User.countDocuments({})) === 0;
@@ -20,6 +25,21 @@ const register = async (req, res) => {
   const user = await User.create({ name, email, password, role,verificationToken });
   res.status(StatusCodes.CREATED).json({ user: user });
 };
+const verifyEmail= async (req,res)=>{
+  const {verificationToken,email}= req.body;
+  const user= await User.findOne({email})
+  if(!user){
+    throw new CustomError.BadRequestError('Please provide valid email address');
+  }
+  if(verificationToken !==user.verificationToken){
+    throw new CustomError.UnauthenticatedError('Verification Failed');
+  }
+  user.isVerified=true,
+  user.verified= Date.now(),
+  user.verificationToken=''
+  await user.save()
+  res.status(StatusCodes.OK).json({ msg: 'Email Verified' });
+}
 const login = async (req, res) => {
   const { email, password } = req.body;
 
@@ -42,7 +62,7 @@ const login = async (req, res) => {
   const tokenUser = createTokenUser(user);
   attachCookiesToResponse({ res, user: tokenUser });
 
-  res.status(StatusCodes.OK).json({ user: tokenUser });
+  res.status(StatusCodes.OK).json({user });
 };
 const logout = async (req, res) => {
   res.cookie('token', 'logout', {
@@ -56,4 +76,5 @@ module.exports = {
   register,
   login,
   logout,
+  verifyEmail
 };
