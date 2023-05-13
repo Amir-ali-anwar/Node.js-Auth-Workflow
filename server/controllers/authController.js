@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const { StatusCodes } = require('http-status-codes');
+const crypto= require('crypto')
 const CustomError = require('../errors');
 const { attachCookiesToResponse, createTokenUser } = require('../utils');
 
@@ -15,10 +16,9 @@ const register = async (req, res) => {
   const isFirstAccount = (await User.countDocuments({})) === 0;
   const role = isFirstAccount ? 'admin' : 'user';
 
-  const user = await User.create({ name, email, password, role });
-  const tokenUser = createTokenUser(user);
-  attachCookiesToResponse({ res, user: tokenUser });
-  res.status(StatusCodes.CREATED).json({ user: tokenUser });
+  const verificationToken= crypto.randomBytes(40).toString('hex')
+  const user = await User.create({ name, email, password, role,verificationToken });
+  res.status(StatusCodes.CREATED).json({ user: user });
 };
 const login = async (req, res) => {
   const { email, password } = req.body;
@@ -31,9 +31,13 @@ const login = async (req, res) => {
   if (!user) {
     throw new CustomError.UnauthenticatedError('Invalid Credentials');
   }
+ 
   const isPasswordCorrect = await user.comparePassword(password);
   if (!isPasswordCorrect) {
     throw new CustomError.UnauthenticatedError('Invalid Credentials');
+  }
+  if(!user.isVerified){
+    throw new CustomError.UnauthenticatedError('Please verify your email');
   }
   const tokenUser = createTokenUser(user);
   attachCookiesToResponse({ res, user: tokenUser });
