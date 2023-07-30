@@ -9,6 +9,9 @@ const authenticateUser = async (req, res, next) => {
       req.user = payload.user;
       return next();
     }
+    if(refreshToken){
+
+    }
   } catch (error) {
     throw new CustomError.UnauthenticatedError('Authentication Invalid');
   }
