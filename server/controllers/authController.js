@@ -68,17 +68,21 @@ const login = async (req, res) => {
   }
   const tokenUser = createTokenUser(user);
   //refresh token
-  let refreshToken = '';
   const existingToken = await Token.findOne({ user: user._id });
-  if(existingToken){
+  if (existingToken) {
     const { isValid } = existingToken;
     if (!isValid) {
       throw new CustomError.UnauthenticatedError('Invalid Credentials');
     }
-    refreshToken=existingToken.refreshToken
-    attachCookiesToResponse({ res, user: tokenUser, refreshToken });
+    attachCookiesToResponse({
+      res,
+      user: tokenUser,
+      refreshToken: existingToken.refreshToken,
+    });
+    return res.status(StatusCodes.OK).json({ tokenUser });
   }
-  refreshToken= crypto.randomBytes(40).toString('hex');
+
+  const refreshToken = crypto.randomBytes(40).toString('hex');
   const userAgent = req.headers['user-agent'];
   const ip = req.ip;
   const userToken= {refreshToken,ip,userAgent,user:user._id};
@@ -88,9 +92,14 @@ const login = async (req, res) => {
   res.status(StatusCodes.OK).json({tokenUser });
 };
 const logout = async (req, res) => {
-  res.cookie('token', 'logout', {
+  await Token.findOneAndDelete({ user: req.user.userId });
+  res.cookie('accessToken', 'logout', {
     httpOnly: true,
-    expires: new Date(Date.now() + 1000),
+    expires: new Date(Date.now()),
+  });
+  res.cookie('refreshToken', 'logout', {
+    httpOnly: true,
+    expires: new Date(Date.now()),
   });
   res.status(StatusCodes.OK).json({ msg: 'user logged out!' });
 };
