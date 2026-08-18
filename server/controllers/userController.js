@@ -6,6 +6,7 @@ const {
   createTokenUser,
   attachCookiesToResponse,
   checkPermissions,
+  validatePasswordStrength,
 } = require('../utils');
 
 const getAllUsers = async (req, res) => {
@@ -54,6 +55,8 @@ const updateUserPassword = async (req, res) => {
   if (!isPasswordCorrect) {
     throw new CustomError.UnauthenticatedError('Invalid Credentials');
   }
+
+  await validatePasswordStrength(newPassword, [user.name, user.email]);
   user.password = newPassword;
 
   await user.save();

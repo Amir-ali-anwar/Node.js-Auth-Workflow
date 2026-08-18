@@ -8,21 +8,28 @@ const {
   createTokenUser,
   sendVerificationEmail,
   sendResetPasswordEmail,
+  sendNewDeviceAlertEmail,
   createHash,
+  validatePasswordStrength,
 } = require('../utils');
+
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_BASE_MINUTES = 1;
+const MAX_KNOWN_DEVICES = 10;
 
 const register = async (req, res) => {
   const { email, name, password } = req.body;
 
   const emailAlreadyExists = await User.findOne({ email });
-  
+
   if (emailAlreadyExists && !emailAlreadyExists.isVerified ) {
     throw new CustomError.BadRequestError('Email already exists, please verify your email');
-  }  
+  }
   if (emailAlreadyExists) {
     throw new CustomError.BadRequestError('Email already exists');
   }
 
+  await validatePasswordStrength(password, [name, email]);
 
   // first registered user is an admin
   const isFirstAccount = (await User.countDocuments({})) === 0;
@@ -64,19 +71,56 @@ const login = async (req, res) => {
   if (!user) {
     throw new CustomError.UnauthenticatedError('Invalid Credentials');
   }
- 
+
+  if (user.lockUntil && user.lockUntil > Date.now()) {
+    const minutesLeft = Math.ceil((user.lockUntil - Date.now()) / 60000);
+    throw new CustomError.TooManyRequestsError(
+      `Account temporarily locked due to repeated failed login attempts. Try again in ${minutesLeft} minute(s).`
+    );
+  }
+
   const isPasswordCorrect = await user.comparePassword(password);
   if (!isPasswordCorrect) {
+    user.loginAttempts = (user.loginAttempts || 0) + 1;
+    if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+      const lockCount = Math.floor(user.loginAttempts / MAX_LOGIN_ATTEMPTS);
+      const lockMinutes = LOCK_BASE_MINUTES * 2 ** (lockCount - 1);
+      user.lockUntil = new Date(Date.now() + lockMinutes * 60 * 1000);
+    }
+    await user.save();
     throw new CustomError.UnauthenticatedError('Invalid Credentials');
   }
   if(!user.isVerified){
     throw new CustomError.UnauthenticatedError('Please verify your email');
   }
+
+  user.loginAttempts = 0;
+  user.lockUntil = undefined;
+
   const tokenUser = createTokenUser(user);
   // each login is its own session/device - do not reuse another session's refresh token
   const refreshToken = crypto.randomBytes(40).toString('hex');
   const userAgent = req.headers['user-agent'];
   const ip = req.ip;
+
+  const knownDevice = user.knownDevices.find(
+    (device) => device.ip === ip && device.userAgent === userAgent
+  );
+  if (knownDevice) {
+    knownDevice.lastSeen = new Date();
+  } else {
+    try {
+      await sendNewDeviceAlertEmail({ name: user.name, email: user.email, ip, userAgent });
+    } catch (error) {
+      // do not block login if the alert email fails to send
+    }
+    user.knownDevices.push({ ip, userAgent, lastSeen: new Date() });
+    if (user.knownDevices.length > MAX_KNOWN_DEVICES) {
+      user.knownDevices = user.knownDevices.slice(-MAX_KNOWN_DEVICES);
+    }
+  }
+  await user.save();
+
   const userToken= {refreshToken,ip,userAgent,user:user._id};
   await Token.create(userToken)
   attachCookiesToResponse({ res, user: tokenUser,refreshToken });
@@ -188,6 +232,8 @@ const resetPassword = async (req, res) => {
   ) {
     throw new CustomError.UnauthenticatedError('Invalid or expired token');
   }
+
+  await validatePasswordStrength(password, [user.name, user.email]);
 
   user.password = password;
   user.passwordToken = null;

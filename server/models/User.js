@@ -36,6 +36,15 @@ const UserSchema = new mongoose.Schema({
   verified:Date,
   passwordToken: String,
   passwordTokenExpirationDate: Date,
+  loginAttempts: { type: Number, default: 0 },
+  lockUntil: Date,
+  knownDevices: [
+    {
+      ip: String,
+      userAgent: String,
+      lastSeen: Date,
+    },
+  ],
 });
 
 UserSchema.pre('save', async function () {
