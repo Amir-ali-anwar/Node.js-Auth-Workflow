@@ -73,21 +73,7 @@ const login = async (req, res) => {
     throw new CustomError.UnauthenticatedError('Please verify your email');
   }
   const tokenUser = createTokenUser(user);
-  //refresh token
-  const existingToken = await Token.findOne({ user: user._id });
-  if (existingToken) {
-    const { isValid } = existingToken;
-    if (!isValid) {
-      throw new CustomError.UnauthenticatedError('Invalid Credentials');
-    }
-    attachCookiesToResponse({
-      res,
-      user: tokenUser,
-      refreshToken: existingToken.refreshToken,
-    });
-    return res.status(StatusCodes.OK).json({ tokenUser });
-  }
-
+  // each login is its own session/device - do not reuse another session's refresh token
   const refreshToken = crypto.randomBytes(40).toString('hex');
   const userAgent = req.headers['user-agent'];
   const ip = req.ip;
@@ -97,8 +83,7 @@ const login = async (req, res) => {
 
   res.status(StatusCodes.OK).json({tokenUser });
 };
-const logout = async (req, res) => {
-  await Token.findOneAndDelete({ user: req.user.userId });
+const clearAuthCookies = (res) => {
   res.cookie('accessToken', 'logout', {
     httpOnly: true,
     expires: new Date(Date.now()),
@@ -111,7 +96,52 @@ const logout = async (req, res) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
   });
+};
+
+const logout = async (req, res) => {
+  // req.currentRefreshToken is set by authenticateUser and reflects the
+  // rotated value if this request itself triggered a refresh
+  if (req.currentRefreshToken) {
+    await Token.findOneAndDelete({
+      user: req.user.userId,
+      refreshToken: req.currentRefreshToken,
+    });
+  }
+  clearAuthCookies(res);
   res.status(StatusCodes.OK).json({ msg: 'user logged out!' });
+};
+
+const logoutAllSessions = async (req, res) => {
+  await Token.deleteMany({ user: req.user.userId });
+  clearAuthCookies(res);
+  res.status(StatusCodes.OK).json({ msg: 'Logged out of all devices' });
+};
+
+const getSessions = async (req, res) => {
+  const tokens = await Token.find({ user: req.user.userId }).sort(
+    '-updatedAt'
+  );
+  const sessions = tokens.map((token) => ({
+    id: token._id,
+    ip: token.ip,
+    userAgent: token.userAgent,
+    createdAt: token.createdAt,
+    updatedAt: token.updatedAt,
+    isCurrent: Boolean(
+      req.currentRefreshToken && token.refreshToken === req.currentRefreshToken
+    ),
+  }));
+  res.status(StatusCodes.OK).json({ sessions, count: sessions.length });
+};
+
+const revokeSession = async (req, res) => {
+  const { id } = req.params;
+  const token = await Token.findOne({ _id: id, user: req.user.userId });
+  if (!token) {
+    throw new CustomError.NotFoundError('No session found with that id');
+  }
+  await token.deleteOne();
+  res.status(StatusCodes.OK).json({ msg: 'Session revoked' });
 };
 
 const forgotPassword = async (req, res) => {
@@ -163,8 +193,8 @@ const resetPassword = async (req, res) => {
   user.passwordToken = null;
   user.passwordTokenExpirationDate = null;
   await user.save();
-  // password changed - revoke any existing sessions
-  await Token.findOneAndDelete({ user: user._id });
+  // password changed - revoke all existing sessions across every device
+  await Token.deleteMany({ user: user._id });
 
   res.status(StatusCodes.OK).json({ msg: 'Password reset successful' });
 };
@@ -173,6 +203,9 @@ module.exports = {
   register,
   login,
   logout,
+  logoutAllSessions,
+  getSessions,
+  revokeSession,
   verifyEmail,
   forgotPassword,
   resetPassword,

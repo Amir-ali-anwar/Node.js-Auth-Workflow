@@ -57,8 +57,11 @@ const updateUserPassword = async (req, res) => {
   user.password = newPassword;
 
   await user.save();
-  // password changed - revoke any existing sessions
-  await Token.findOneAndDelete({ user: user._id });
+  // password changed - revoke every other session, keep this device's session alive
+  await Token.deleteMany({
+    user: user._id,
+    refreshToken: { $ne: req.currentRefreshToken },
+  });
   res.status(StatusCodes.OK).json({ msg: 'Success! Password Updated.' });
 };
 
