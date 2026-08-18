@@ -3,7 +3,13 @@ const Token= require('../models/Token')
 const { StatusCodes } = require('http-status-codes');
 const crypto= require('crypto')
 const CustomError = require('../errors');
-const { attachCookiesToResponse, createTokenUser,sendVerificationEmail } = require('../utils');
+const {
+  attachCookiesToResponse,
+  createTokenUser,
+  sendVerificationEmail,
+  sendResetPasswordEmail,
+  createHash,
+} = require('../utils');
 
 const register = async (req, res) => {
   const { email, name, password } = req.body;
@@ -24,7 +30,7 @@ const register = async (req, res) => {
 
   const verificationToken= crypto.randomBytes(40).toString('hex')
   const user = await User.create({ name, email, password, role,verificationToken });
-  const origin = 'http://localhost:3000';
+  const origin = process.env.CLIENT_URL || 'http://localhost:3000';
 
   await sendVerificationEmail({  name: user.name,
     email: user.email,
@@ -96,17 +102,78 @@ const logout = async (req, res) => {
   res.cookie('accessToken', 'logout', {
     httpOnly: true,
     expires: new Date(Date.now()),
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
   });
   res.cookie('refreshToken', 'logout', {
     httpOnly: true,
     expires: new Date(Date.now()),
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
   });
   res.status(StatusCodes.OK).json({ msg: 'user logged out!' });
+};
+
+const forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    throw new CustomError.BadRequestError('Please provide a valid email');
+  }
+  const user = await User.findOne({ email });
+
+  if (user) {
+    const passwordToken = crypto.randomBytes(70).toString('hex');
+    const origin = process.env.CLIENT_URL || 'http://localhost:3000';
+    await sendResetPasswordEmail({
+      name: user.name,
+      email: user.email,
+      token: passwordToken,
+      origin,
+    });
+
+    const tenMinutes = 1000 * 60 * 10;
+    const passwordTokenExpirationDate = new Date(Date.now() + tenMinutes);
+
+    user.passwordToken = createHash(passwordToken);
+    user.passwordTokenExpirationDate = passwordTokenExpirationDate;
+    await user.save();
+  }
+
+  res
+    .status(StatusCodes.OK)
+    .json({ msg: 'Please check your email for a reset password link' });
+};
+
+const resetPassword = async (req, res) => {
+  const { token, email, password } = req.body;
+  if (!token || !email || !password) {
+    throw new CustomError.BadRequestError('Please provide all values');
+  }
+  const user = await User.findOne({ email });
+  if (
+    !user ||
+    user.passwordToken !== createHash(token) ||
+    !user.passwordTokenExpirationDate ||
+    user.passwordTokenExpirationDate < new Date()
+  ) {
+    throw new CustomError.UnauthenticatedError('Invalid or expired token');
+  }
+
+  user.password = password;
+  user.passwordToken = null;
+  user.passwordTokenExpirationDate = null;
+  await user.save();
+  // password changed - revoke any existing sessions
+  await Token.findOneAndDelete({ user: user._id });
+
+  res.status(StatusCodes.OK).json({ msg: 'Password reset successful' });
 };
 
 module.exports = {
   register,
   login,
   logout,
-  verifyEmail
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
 };

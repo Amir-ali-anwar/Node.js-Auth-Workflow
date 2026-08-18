@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Token = require('../models/Token');
 const { StatusCodes } = require('http-status-codes');
 const CustomError = require('../errors');
 const {
@@ -56,6 +57,8 @@ const updateUserPassword = async (req, res) => {
   user.password = newPassword;
 
   await user.save();
+  // password changed - revoke any existing sessions
+  await Token.findOneAndDelete({ user: user._id });
   res.status(StatusCodes.OK).json({ msg: 'Success! Password Updated.' });
 };
 

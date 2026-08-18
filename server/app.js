@@ -36,7 +36,12 @@ app.use(
   })
 );
 app.use(helmet());
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    credentials: true,
+  })
+);
 app.use(xss());
 app.use(mongoSanitize());
 
