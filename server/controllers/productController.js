@@ -2,10 +2,35 @@ const Product = require('../models/Product');
 const { StatusCodes } = require('http-status-codes');
 const CustomError = require('../errors');
 const path = require('path');
+const crypto = require('crypto');
+
+const ALLOWED_PRODUCT_FIELDS = [
+  'name',
+  'price',
+  'description',
+  'image',
+  'category',
+  'company',
+  'colors',
+  'featured',
+  'freeShipping',
+  'inventory',
+];
+
+const pickAllowedFields = (body, allowedFields) => {
+  const result = {};
+  for (const field of allowedFields) {
+    if (body[field] !== undefined) {
+      result[field] = body[field];
+    }
+  }
+  return result;
+};
 
 const createProduct = async (req, res) => {
-  req.body.user = req.user.userId;
-  const product = await Product.create(req.body);
+  const productData = pickAllowedFields(req.body, ALLOWED_PRODUCT_FIELDS);
+  productData.user = req.user.userId;
+  const product = await Product.create(productData);
   res.status(StatusCodes.CREATED).json({ product });
 };
 const getAllProducts = async (req, res) => {
@@ -26,8 +51,9 @@ const getSingleProduct = async (req, res) => {
 };
 const updateProduct = async (req, res) => {
   const { id: productId } = req.params;
+  const productData = pickAllowedFields(req.body, ALLOWED_PRODUCT_FIELDS);
 
-  const product = await Product.findOneAndUpdate({ _id: productId }, req.body, {
+  const product = await Product.findOneAndUpdate({ _id: productId }, productData, {
     new: true,
     runValidators: true,
   });
@@ -50,6 +76,8 @@ const deleteProduct = async (req, res) => {
   await product.remove();
   res.status(StatusCodes.OK).json({ msg: 'Success! Product removed.' });
 };
+const ALLOWED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+
 const uploadImage = async (req, res) => {
   if (!req.files) {
     throw new CustomError.BadRequestError('No File Uploaded');
@@ -68,12 +96,17 @@ const uploadImage = async (req, res) => {
     );
   }
 
-  const imagePath = path.join(
-    __dirname,
-    '../public/uploads/' + `${productImage.name}`
-  );
+  const fileExtension = path.extname(productImage.name).toLowerCase();
+  if (!ALLOWED_IMAGE_EXTENSIONS.includes(fileExtension)) {
+    throw new CustomError.BadRequestError('Unsupported image type');
+  }
+
+  // never trust the client-supplied filename for the on-disk path - generate
+  // our own to eliminate path traversal and filename collisions entirely
+  const safeFileName = `${crypto.randomBytes(16).toString('hex')}${fileExtension}`;
+  const imagePath = path.join(__dirname, '../public/uploads/', safeFileName);
   await productImage.mv(imagePath);
-  res.status(StatusCodes.OK).json({ image: `/uploads/${productImage.name}` });
+  res.status(StatusCodes.OK).json({ image: `/uploads/${safeFileName}` });
 };
 
 module.exports = {

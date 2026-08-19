@@ -25,8 +25,14 @@ const createReview = async (req, res) => {
     );
   }
 
-  req.body.user = req.user.userId;
-  const review = await Review.create(req.body);
+  const { rating, title, comment } = req.body;
+  const review = await Review.create({
+    rating,
+    title,
+    comment,
+    product: productId,
+    user: req.user.userId,
+  });
   res.status(StatusCodes.CREATED).json({ review });
 };
 const getAllReviews = async (req, res) => {

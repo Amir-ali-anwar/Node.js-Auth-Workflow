@@ -29,6 +29,7 @@ const UserSchema = new mongoose.Schema({
     default: 'user',
   },
   verificationToken:String,
+  verificationTokenExpirationDate: Date,
   isVerified:{
    type:Boolean,
    default:false

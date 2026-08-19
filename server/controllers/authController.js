@@ -11,7 +11,12 @@ const {
   sendNewDeviceAlertEmail,
   createHash,
   validatePasswordStrength,
+  safeCompare,
+  claimFirstAdminSlot,
+  releaseFirstAdminSlot,
 } = require('../utils');
+
+const VERIFICATION_TOKEN_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCK_BASE_MINUTES = 1;
@@ -20,46 +25,78 @@ const MAX_KNOWN_DEVICES = 10;
 const register = async (req, res) => {
   const { email, name, password } = req.body;
 
-  const emailAlreadyExists = await User.findOne({ email });
+  const existingUser = await User.findOne({ email });
 
-  if (emailAlreadyExists && !emailAlreadyExists.isVerified ) {
-    throw new CustomError.BadRequestError('Email already exists, please verify your email');
-  }
-  if (emailAlreadyExists) {
-    throw new CustomError.BadRequestError('Email already exists');
+  // never reveal whether the email is already registered/verified - every
+  // path below responds identically to a brand-new registration
+  if (existingUser && existingUser.isVerified) {
+    return res
+      .status(StatusCodes.CREATED)
+      .json({ msg: 'Success! Please check your email to verify account' });
   }
 
   await validatePasswordStrength(password, [name, email]);
 
-  // first registered user is an admin
-  const isFirstAccount = (await User.countDocuments({})) === 0;
-  const role = isFirstAccount ? 'admin' : 'user';
-
-  const verificationToken= crypto.randomBytes(40).toString('hex')
-  const user = await User.create({ name, email, password, role,verificationToken });
+  const verificationToken = crypto.randomBytes(40).toString('hex');
+  const verificationTokenExpirationDate = new Date(
+    Date.now() + VERIFICATION_TOKEN_LIFETIME_MS
+  );
   const origin = process.env.CLIENT_URL || 'http://localhost:3000';
 
-  await sendVerificationEmail({  name: user.name,
-    email: user.email,
-    verificationToken: user.verificationToken,
-    origin});
-  res.status(StatusCodes.CREATED).json({  msg: 'Success! Please check your email to verify account'});
-};
-const verifyEmail= async (req,res)=>{
-  const {verificationToken,email}= req.body;
-  const user= await User.findOne({email})
-  if(!user){
-    throw new CustomError.BadRequestError('Please provide valid email address');
+  if (existingUser) {
+    // unverified account re-registering - refresh credentials/token in place
+    // instead of creating a duplicate (email is unique)
+    existingUser.name = name;
+    existingUser.password = password;
+    existingUser.verificationToken = createHash(verificationToken);
+    existingUser.verificationTokenExpirationDate = verificationTokenExpirationDate;
+    await existingUser.save();
+  } else {
+    // first registered user is an admin - claimed atomically so concurrent
+    // registrations can't all see themselves as the first user
+    const isFirstAccount = await claimFirstAdminSlot();
+    const role = isFirstAccount ? 'admin' : 'user';
+    try {
+      await User.create({
+        name,
+        email,
+        password,
+        role,
+        verificationToken: createHash(verificationToken),
+        verificationTokenExpirationDate,
+      });
+    } catch (error) {
+      if (isFirstAccount) {
+        await releaseFirstAdminSlot();
+      }
+      throw error;
+    }
   }
-  if(verificationToken !==user.verificationToken){
+
+  await sendVerificationEmail({ name, email, verificationToken, origin });
+  res
+    .status(StatusCodes.CREATED)
+    .json({ msg: 'Success! Please check your email to verify account' });
+};
+const verifyEmail = async (req, res) => {
+  const { verificationToken, email } = req.body;
+  const user = await User.findOne({ email });
+  if (
+    !user ||
+    !user.verificationToken ||
+    !safeCompare(createHash(verificationToken || ''), user.verificationToken) ||
+    !user.verificationTokenExpirationDate ||
+    user.verificationTokenExpirationDate < new Date()
+  ) {
     throw new CustomError.UnauthenticatedError('Verification Failed');
   }
-  user.isVerified=true,
-  user.verified= Date.now(),
-  user.verificationToken=''
-  await user.save()
+  user.isVerified = true;
+  user.verified = Date.now();
+  user.verificationToken = '';
+  user.verificationTokenExpirationDate = undefined;
+  await user.save();
   res.status(StatusCodes.OK).json({ msg: 'Email Verified' });
-}
+};
 const login = async (req, res) => {
   const { email, password } = req.body;
 

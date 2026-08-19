@@ -6,6 +6,8 @@ const sendResetPasswordEmail = require('./sendResetPasswordEmail');
 const sendNewDeviceAlertEmail = require('./sendNewDeviceAlertEmail');
 const createHash = require('./createHash');
 const validatePasswordStrength = require('./validatePasswordStrength');
+const safeCompare = require('./safeCompare');
+const { claimFirstAdminSlot, releaseFirstAdminSlot } = require('./claimFirstAdminSlot');
 module.exports = {
   createJWT,
   isTokenValid,
@@ -17,4 +19,7 @@ module.exports = {
   sendNewDeviceAlertEmail,
   createHash,
   validatePasswordStrength,
+  safeCompare,
+  claimFirstAdminSlot,
+  releaseFirstAdminSlot,
 };
